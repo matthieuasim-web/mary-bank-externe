@@ -4,6 +4,7 @@ from rest_framework import serializers
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import connection
 
+
 class ClientLoginSerializer(serializers.Serializer):
     """Connexion client avec numéro de compte et mot de passe"""
     numero_compte = serializers.CharField(max_length=20)
@@ -13,7 +14,7 @@ class ClientLoginSerializer(serializers.Serializer):
         numero_compte = data.get('numero_compte')
         password = data.get('password')
         
-        # Chercher le client dans la base
+        # Chercher le client dans la base MySQL
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT 
@@ -103,7 +104,7 @@ class ClientSetPasswordSerializer(serializers.Serializer):
         with connection.cursor() as cursor:
             cursor.execute("""
                 UPDATE clients_client 
-                SET password = %s, password_is_set = TRUE 
+                SET password = %s, password_is_set = 1 
                 WHERE id = %s
             """, [hashed_password, self.client_id])
 

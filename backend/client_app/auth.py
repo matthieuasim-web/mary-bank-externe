@@ -2,10 +2,8 @@
 
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed
-from django.contrib.auth.models import AnonymousUser
-import psycopg2
-from django.conf import settings
 from django.db import connection
+
 
 class ClientUser:
     """
@@ -50,7 +48,7 @@ class ClientJWTAuthentication(JWTAuthentication):
             if not numero_compte:
                 raise InvalidToken('Token invalide : numero_compte manquant')
             
-            # Requête directe à la base de données
+            # Requête MySQL
             with connection.cursor() as cursor:
                 cursor.execute("""
                     SELECT 
@@ -74,5 +72,7 @@ class ClientJWTAuthentication(JWTAuthentication):
                 client_data = dict(zip(columns, row))
                 return ClientUser(client_data)
                 
+        except AuthenticationFailed:
+            raise
         except Exception as e:
             raise AuthenticationFailed(f'Erreur d\'authentification : {str(e)}')

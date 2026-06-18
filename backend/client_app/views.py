@@ -4,9 +4,10 @@ from rest_framework import status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.db import connection
+from django.db import connection, transaction
 from django.utils import timezone
 from datetime import timedelta
+import uuid
 
 from .auth import ClientUser, ClientJWTAuthentication
 from .serializers import (
@@ -106,7 +107,16 @@ class ClientProfileView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     
     def get(self, request):
-        client = request.user  # C'est notre ClientUser
+        client = request.user
+        
+        # Récupérer le solde à jour depuis la base
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT solde FROM clients_client WHERE id = %s
+            """, [client.id])
+            row = cursor.fetchone()
+            if row:
+                client.solde = row[0]
         
         return Response({
             'status': 'success',
@@ -136,14 +146,20 @@ class SoldeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     
     def get(self, request):
-        client = request.user
+        # Récupérer le solde en temps réel depuis la base
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT solde FROM clients_client WHERE id = %s
+            """, [request.user.id])
+            row = cursor.fetchone()
+            solde = row[0] if row else 0
         
         return Response({
             'status': 'success',
             'data': {
-                'solde': str(client.solde),
-                'devise': client.devise,
-                'numero_compte': client.numero_compte,
+                'solde': str(solde),
+                'devise': request.user.devise,
+                'numero_compte': request.user.numero_compte,
             }
         })
 
@@ -221,7 +237,7 @@ class RefreshTokenView(APIView):
                 'status': 'error',
                 'message': 'Token invalide ou expiré'
             }, status=status.HTTP_401_UNAUTHORIZED)
-        
+
 
 class TransfertView(APIView):
     """
@@ -232,14 +248,20 @@ class TransfertView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     
     def post(self, request):
-        client = request.user  # ClientUser
+        # Récupérer le solde frais depuis la base
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT solde FROM clients_client WHERE id = %s
+            """, [request.user.id])
+            row = cursor.fetchone()
+            solde_actuel = row[0] if row else 0
         
-        # Ajouter le contexte pour le serializer
+        # Mettre à jour le solde dans le contexte
         serializer = TransfertSerializer(
             data=request.data,
             context={
-                'numero_compte_source': client.numero_compte,
-                'solde': client.solde
+                'numero_compte_source': request.user.numero_compte,
+                'solde': solde_actuel
             }
         )
         
@@ -254,76 +276,74 @@ class TransfertView(APIView):
         description = serializer.validated_data.get('description', '')
         
         try:
-            with connection.cursor() as cursor:
-                # Démarrer une transaction PostgreSQL
-                cursor.execute("BEGIN")
-                
-                # 1. Débiter le compte source
-                ancien_solde_source = client.solde
-                nouveau_solde_source = ancien_solde_source - montant
-                
-                cursor.execute("""
-                    UPDATE clients_client 
-                    SET solde = %s, updated_at = %s 
-                    WHERE numero_compte = %s
-                """, [nouveau_solde_source, timezone.now(), client.numero_compte])
-                
-                # 2. Créditer le compte destination
-                cursor.execute("""
-                    SELECT solde FROM clients_client WHERE numero_compte = %s
-                """, [compte_dest])
-                ancien_solde_dest = cursor.fetchone()[0]
-                nouveau_solde_dest = ancien_solde_dest + montant
-                
-                cursor.execute("""
-                    UPDATE clients_client 
-                    SET solde = %s, updated_at = %s 
-                    WHERE numero_compte = %s
-                """, [nouveau_solde_dest, timezone.now(), compte_dest])
-                
-                # 3. Créer transaction source (débit)
-                import uuid
-                ref_source = f"TRF-{uuid.uuid4().hex[:10].upper()}"
-                cursor.execute("""
-                    INSERT INTO transactions_transaction 
-                    (reference, client_id, type_transaction, montant, description, 
-                     statut, ancien_solde, nouveau_solde, effectue_par_id, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, [
-                    ref_source,
-                    client.id,
-                    'TRANSFERT',
-                    montant,
-                    f"Transfert vers {compte_dest}. {description}",
-                    'REUSSIE',
-                    ancien_solde_source,
-                    nouveau_solde_source,
-                    None,  # Pas d'employé, c'est le client lui-même
-                    timezone.now()
-                ])
-                
-                # 4. Créer transaction destination (crédit)
-                ref_dest = f"TRF-{uuid.uuid4().hex[:10].upper()}"
-                cursor.execute("""
-                    INSERT INTO transactions_transaction 
-                    (reference, client_id, type_transaction, montant, description, 
-                     statut, ancien_solde, nouveau_solde, effectue_par_id, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, [
-                    ref_dest,
-                    serializer.compte_dest_data['id'],
-                    'TRANSFERT',
-                    montant,
-                    f"Transfert reçu de {client.numero_compte} - {client.nom_complet}. {description}",
-                    'REUSSIE',
-                    ancien_solde_dest,
-                    nouveau_solde_dest,
-                    None,
-                    timezone.now()
-                ])
-                
-                # Valider la transaction
-                cursor.execute("COMMIT")
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    # 1. Débiter le compte source
+                    cursor.execute("""
+                        SELECT solde FROM clients_client WHERE id = %s FOR UPDATE
+                    """, [request.user.id])
+                    ancien_solde_source = cursor.fetchone()[0]
+                    nouveau_solde_source = ancien_solde_source - montant
+                    
+                    cursor.execute("""
+                        UPDATE clients_client 
+                        SET solde = %s, updated_at = %s 
+                        WHERE id = %s
+                    """, [nouveau_solde_source, timezone.now(), request.user.id])
+                    
+                    # 2. Créditer le compte destination
+                    cursor.execute("""
+                        SELECT solde FROM clients_client 
+                        WHERE numero_compte = %s FOR UPDATE
+                    """, [compte_dest])
+                    ancien_solde_dest = cursor.fetchone()[0]
+                    nouveau_solde_dest = ancien_solde_dest + montant
+                    
+                    cursor.execute("""
+                        UPDATE clients_client 
+                        SET solde = %s, updated_at = %s 
+                        WHERE numero_compte = %s
+                    """, [nouveau_solde_dest, timezone.now(), compte_dest])
+                    
+                    # 3. Créer transaction source
+                    ref_source = f"TRF-{uuid.uuid4().hex[:10].upper()}"
+                    cursor.execute("""
+                        INSERT INTO transactions_transaction 
+                        (reference, client_id, type_transaction, montant, description, 
+                         statut, ancien_solde, nouveau_solde, effectue_par_id, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, [
+                        ref_source,
+                        request.user.id,
+                        'TRANSFERT',
+                        montant,
+                        f"Transfert vers {compte_dest}. {description}",
+                        'REUSSIE',
+                        ancien_solde_source,
+                        nouveau_solde_source,
+                        None,
+                        timezone.now()
+                    ])
+                    
+                    # 4. Créer transaction destination
+                    ref_dest = f"TRF-{uuid.uuid4().hex[:10].upper()}"
+                    cursor.execute("""
+                        INSERT INTO transactions_transaction 
+                        (reference, client_id, type_transaction, montant, description, 
+                         statut, ancien_solde, nouveau_solde, effectue_par_id, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, [
+                        ref_dest,
+                        serializer.compte_dest_data['id'],
+                        'TRANSFERT',
+                        montant,
+                        f"Transfert reçu de {request.user.numero_compte} - {request.user.nom_complet}. {description}",
+                        'REUSSIE',
+                        ancien_solde_dest,
+                        nouveau_solde_dest,
+                        None,
+                        timezone.now()
+                    ])
             
             return Response({
                 'status': 'success',
@@ -340,10 +360,6 @@ class TransfertView(APIView):
             })
             
         except Exception as e:
-            # Annuler en cas d'erreur
-            with connection.cursor() as cursor:
-                cursor.execute("ROLLBACK")
-            
             return Response({
                 'status': 'error',
                 'message': f'Erreur lors du transfert : {str(e)}'

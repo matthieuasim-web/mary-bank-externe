@@ -3,9 +3,6 @@
 import os
 from pathlib import Path
 from datetime import timedelta
-from dotenv import load_dotenv
-
-load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -63,22 +60,8 @@ TEMPLATES = [
 WSGI_APPLICATION = 'banking_client.wsgi.application'
 
 # ============================================
-# BASE DE DONNÉES PARTAGÉE (PostgreSQL)
+# BASE DE DONNÉES PARTAGÉE (MySql)
 # ============================================
-
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': os.environ.get('DB_NAME', 'banque_db'),
-#         'USER': os.environ.get('DB_USER', 'banque_client_user'),
-#         'PASSWORD': os.environ.get('DB_PASSWORD', ''),
-#         'HOST': os.environ.get('DB_HOST', 'localhost'),
-#         'PORT': os.environ.get('DB_PORT', '5432'),
-#         'OPTIONS': {
-#             'options': '-c search_path=public'
-#         },
-#     }
-# }
 
 DATABASES = {
     'default': {
