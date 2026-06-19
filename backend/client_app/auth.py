@@ -7,7 +7,8 @@ from django.db import connection
 
 class ClientUser:
     """
-    Représente un client connecté (n'est pas un vrai modèle Django User).
+    Représente un client connecté.
+    Le solde est toujours récupéré frais depuis la base de données.
     """
     def __init__(self, client_data):
         self.id = client_data.get('id')
@@ -17,7 +18,7 @@ class ClientUser:
         self.prenom = client_data.get('prenom')
         self.email = client_data.get('email')
         self.telephone = client_data.get('telephone')
-        self.solde = client_data.get('solde')
+        self._solde = client_data.get('solde')
         self.devise = client_data.get('devise')
         self.type_compte = client_data.get('type_compte')
         self.statut = client_data.get('statut')
@@ -27,6 +28,37 @@ class ClientUser:
     @property
     def nom_complet(self):
         return f"{self.nom} {self.post_nom} {self.prenom}"
+    
+    @property
+    def solde(self):
+        """
+        Récupère TOUJOURS le solde frais depuis la base de données.
+        """
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT solde FROM clients_client WHERE id = %s",
+                    [self.id]
+                )
+                row = cursor.fetchone()
+                if row:
+                    return row[0]
+        except Exception:
+            pass
+        return self._solde
+    
+    def get_fresh_solde(self):
+        """Méthode explicite pour récupérer le solde frais"""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT solde FROM clients_client WHERE id = %s",
+                [self.id]
+            )
+            row = cursor.fetchone()
+            if row:
+                self._solde = row[0]
+                return row[0]
+        return self._solde
     
     def __str__(self):
         return f"{self.nom_complet} - {self.numero_compte}"
@@ -48,7 +80,6 @@ class ClientJWTAuthentication(JWTAuthentication):
             if not numero_compte:
                 raise InvalidToken('Token invalide : numero_compte manquant')
             
-            # Requête MySQL
             with connection.cursor() as cursor:
                 cursor.execute("""
                     SELECT 

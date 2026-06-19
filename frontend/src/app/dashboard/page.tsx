@@ -2,13 +2,13 @@
 'use client';
 
 import { useClientAuth } from '@/context/AuthContext';
-import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react'; 
 import { 
   Wallet, TrendingUp, TrendingDown, ArrowRightLeft,
   Clock, Eye
 } from 'lucide-react';
 import api from '@/lib/api';
-import Link from 'next/link';
+import Link from 'next/link'; 
 
 export default function DashboardPage() {
   const { client } = useClientAuth();

@@ -109,30 +109,39 @@ class ClientProfileView(APIView):
     def get(self, request):
         client = request.user
         
-        # Récupérer le solde à jour depuis la base
+        # Récupérer toutes les infos fraîches depuis la base
         with connection.cursor() as cursor:
             cursor.execute("""
-                SELECT solde FROM clients_client WHERE id = %s
+                SELECT 
+                    id, numero_compte, nom, post_nom, prenom,
+                    email, telephone, solde, devise, type_compte, statut
+                FROM clients_client 
+                WHERE id = %s
             """, [client.id])
+            
             row = cursor.fetchone()
-            if row:
-                client.solde = row[0]
+            
+            if not row:
+                return Response({
+                    'status': 'error',
+                    'message': 'Client non trouvé'
+                }, status=status.HTTP_404_NOT_FOUND)
         
         return Response({
             'status': 'success',
             'data': {
-                'id': client.id,
-                'numero_compte': client.numero_compte,
-                'nom': client.nom,
-                'post_nom': client.post_nom,
-                'prenom': client.prenom,
-                'nom_complet': client.nom_complet,
-                'email': client.email,
-                'telephone': client.telephone,
-                'solde': str(client.solde),
-                'devise': client.devise,
-                'type_compte': client.type_compte,
-                'statut': client.statut,
+                'id': row[0],
+                'numero_compte': row[1],
+                'nom': row[2],
+                'post_nom': row[3],
+                'prenom': row[4],
+                'nom_complet': f"{row[2]} {row[3]} {row[4]}",
+                'email': row[5],
+                'telephone': row[6],
+                'solde': str(row[7]),
+                'devise': row[8],
+                'type_compte': row[9],
+                'statut': row[10],
             }
         })
 
@@ -146,11 +155,12 @@ class SoldeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     
     def get(self, request):
-        # Récupérer le solde en temps réel depuis la base
+        # Récupérer UNIQUEMENT le solde frais
         with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT solde FROM clients_client WHERE id = %s
-            """, [request.user.id])
+            cursor.execute(
+                "SELECT solde FROM clients_client WHERE id = %s",
+                [request.user.id]
+            )
             row = cursor.fetchone()
             solde = row[0] if row else 0
         
@@ -175,7 +185,6 @@ class TransactionHistoryView(APIView):
     def get(self, request):
         client = request.user
         
-        # Récupérer les transactions depuis la base
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT 
@@ -189,9 +198,9 @@ class TransactionHistoryView(APIView):
             
             rows = cursor.fetchall()
         
-        transactions = []
+        transactions_list = []
         for row in rows:
-            transactions.append({
+            transactions_list.append({
                 'reference': row[0],
                 'type_transaction': row[1],
                 'montant': str(row[2]),
@@ -203,8 +212,8 @@ class TransactionHistoryView(APIView):
         
         return Response({
             'status': 'success',
-            'total': len(transactions),
-            'data': transactions
+            'total': len(transactions_list),
+            'data': transactions_list
         })
 
 
@@ -250,13 +259,20 @@ class TransfertView(APIView):
     def post(self, request):
         # Récupérer le solde frais depuis la base
         with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT solde FROM clients_client WHERE id = %s
-            """, [request.user.id])
+            cursor.execute(
+                "SELECT solde FROM clients_client WHERE id = %s",
+                [request.user.id]
+            )
             row = cursor.fetchone()
-            solde_actuel = row[0] if row else 0
+            if not row:
+                return Response({
+                    'status': 'error',
+                    'message': 'Compte non trouvé'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            solde_actuel = row[0]
         
-        # Mettre à jour le solde dans le contexte
+        # Valider avec le solde frais
         serializer = TransfertSerializer(
             data=request.data,
             context={
@@ -278,7 +294,7 @@ class TransfertView(APIView):
         try:
             with transaction.atomic():
                 with connection.cursor() as cursor:
-                    # 1. Débiter le compte source
+                    # 1. Débiter le compte source (avec verrou)
                     cursor.execute("""
                         SELECT solde FROM clients_client WHERE id = %s FOR UPDATE
                     """, [request.user.id])
@@ -291,7 +307,7 @@ class TransfertView(APIView):
                         WHERE id = %s
                     """, [nouveau_solde_source, timezone.now(), request.user.id])
                     
-                    # 2. Créditer le compte destination
+                    # 2. Créditer le compte destination (avec verrou)
                     cursor.execute("""
                         SELECT solde FROM clients_client 
                         WHERE numero_compte = %s FOR UPDATE

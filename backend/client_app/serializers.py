@@ -14,7 +14,6 @@ class ClientLoginSerializer(serializers.Serializer):
         numero_compte = data.get('numero_compte')
         password = data.get('password')
         
-        # Chercher le client dans la base MySQL
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT 
@@ -40,7 +39,6 @@ class ClientLoginSerializer(serializers.Serializer):
             
             client = dict(zip(columns, row))
         
-        # Vérifications
         if client['statut'] != 'ACTIF':
             raise serializers.ValidationError({
                 'numero_compte': f"Votre compte est {client['statut'].lower()}. Contactez votre conseiller."
@@ -56,7 +54,6 @@ class ClientLoginSerializer(serializers.Serializer):
                 'password': 'Mot de passe incorrect.'
             })
         
-        # Stocker les infos du client pour la vue
         self.client_data = client
         return data
 
@@ -80,7 +77,7 @@ class ClientSetPasswordSerializer(serializers.Serializer):
             if not row:
                 raise serializers.ValidationError("Aucun compte trouvé avec ce numéro.")
             
-            if row[1]:  # password_is_set
+            if row[1]:
                 raise serializers.ValidationError("Le mot de passe est déjà défini. Connectez-vous.")
             
             if row[2] != 'ACTIF':
@@ -98,7 +95,6 @@ class ClientSetPasswordSerializer(serializers.Serializer):
         return data
     
     def save(self):
-        """Enregistre le mot de passe hashé"""
         hashed_password = make_password(self.validated_data['password'])
         
         with connection.cursor() as cursor:
@@ -146,7 +142,6 @@ class TransfertSerializer(serializers.Serializer):
     description = serializers.CharField(max_length=255, required=False, allow_blank=True)
     
     def validate_compte_dest(self, value):
-        # Vérifier que le compte destination existe
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT id, statut, nom, post_nom, prenom
@@ -177,13 +172,11 @@ class TransfertSerializer(serializers.Serializer):
         return value
     
     def validate(self, data):
-        # Vérifier que ce n'est pas le même compte
         if self.context.get('numero_compte_source') == data['compte_dest']:
             raise serializers.ValidationError({
                 'compte_dest': 'Impossible de transférer vers votre propre compte.'
             })
         
-        # Vérifier le solde
         if self.context.get('solde', 0) < data['montant']:
             raise serializers.ValidationError({
                 'montant': f"Solde insuffisant. Disponible : {self.context['solde']} USD"
