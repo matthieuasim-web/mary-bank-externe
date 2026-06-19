@@ -69,7 +69,7 @@ DATABASES = {
         'NAME': 'banque_db',          # Database name
         'USER': 'justine',            # MySQL username
         'PASSWORD': 'Asim@123',  # MySQL password
-        'HOST': '192.168.23.133',     # MySQL server host
+        'HOST': '192.168.147.138',     # MySQL server host
         'PORT': '3306',               # Default MySQL port
         'CONN_MAX_AGE': 600,          # Connection pooling (10 minutes)
     }
